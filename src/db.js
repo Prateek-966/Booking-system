@@ -9,27 +9,22 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(path.join(DATA_DIR, 'booking.db'));
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-
 // Schema history:
 //   v1  hourly meeting-room slots
 //   v2  multi-property rental marketplace
 //   v3  a single guesthouse whose individual rooms are the bookable unit
-// Each step replaced the booking model outright, so the older tables are
-// dropped rather than migrated — they only ever held demo seed data.
+// Older versions used incompatible booking models. Never discard their
+// tables automatically: even an old installation may contain real data.
 const SCHEMA_VERSION = 3;
 const currentVersion = db.pragma('user_version', { simple: true });
 
-if (currentVersion > 0 && currentVersion < SCHEMA_VERSION) {
-  db.exec(`
-    DROP TABLE IF EXISTS bookings;
-    DROP TABLE IF EXISTS property_images;
-    DROP TABLE IF EXISTS rooms;
-    DROP TABLE IF EXISTS properties;
-    DROP TABLE IF EXISTS resources;
-  `);
+if (currentVersion !== 0 && currentVersion !== SCHEMA_VERSION) {
+  db.close();
+  throw new Error(`Unsupported database schema version ${currentVersion}; back up the database and migrate it explicitly before starting this version.`);
 }
+
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -182,12 +177,13 @@ addColumnIfMissing('sessions', 'user_agent', "TEXT NOT NULL DEFAULT ''");
 db.pragma(`user_version = ${SCHEMA_VERSION}`);
 
 // The guesthouse row always exists, so the owner edits rather than creates it.
-db.prepare('INSERT OR IGNORE INTO property (id) VALUES (1)').run();
+const propertyCreated = db.prepare('INSERT OR IGNORE INTO property (id) VALUES (1)').run().changes > 0;
 
 // Seed example rooms so a fresh install has something to show. No account is
 // created here: the owner account is provisioned separately by
 // `npm run create-owner`, so seed data never ships usable credentials.
-if (process.env.SEED_DEMO !== '0') {
+// An empty room list can be intentional; only seed a newly created property.
+if (propertyCreated && process.env.SEED_DEMO !== '0') {
   const roomCount = db.prepare('SELECT COUNT(*) AS n FROM rooms').get().n;
   if (roomCount === 0) {
     const seed = db.transaction(() => {

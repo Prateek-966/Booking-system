@@ -11,7 +11,7 @@ services:
     healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION
-        value: 22.22.2
+        value: 22.23.3
       - key: NODE_ENV
         value: production
       - key: HOST

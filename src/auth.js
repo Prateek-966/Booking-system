@@ -73,7 +73,8 @@ function destroySession(req, res) {
   if (token) {
     db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));
   }
-  res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: 'strict', path: '/' });
+  const { maxAge, ...clearOptions } = cookieOptions(0);
+  res.clearCookie(COOKIE_NAME, clearOptions);
 }
 
 // Invalidate every session for a user (used after a password change, a
@@ -202,15 +203,18 @@ function csrfProtection(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
     return next();
   }
+  if (req.headers['sec-fetch-site'] === 'cross-site') {
+    return res.status(403).json({ error: 'Cross-origin request rejected' });
+  }
   const origin = req.headers.origin || req.headers.referer;
   if (origin) {
-    let originHost;
+    let requestOrigin;
     try {
-      originHost = new URL(origin).host;
+      requestOrigin = new URL(origin).origin;
     } catch {
       return res.status(403).json({ error: 'Invalid origin' });
     }
-    if (originHost !== req.headers.host) {
+    if (requestOrigin !== `${req.protocol}://${req.headers.host}`) {
       return res.status(403).json({ error: 'Cross-origin request rejected' });
     }
   }
@@ -223,8 +227,14 @@ function lockRemainingMs(user, now = Date.now()) {
   return user.locked_until > now ? user.locked_until - now : 0;
 }
 
-function recordFailedAttempt(user) {
-  const attempts = user.failed_attempts + 1;
+const recordFailure = db.transaction((userId) => {
+  // Requests can finish their asynchronous password checks concurrently.
+  // Increment the stored count instead of using a pre-comparison snapshot.
+  const row = db.prepare(
+    'UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = ? RETURNING failed_attempts'
+  ).get(userId);
+  if (!row) return 0;
+  const attempts = row.failed_attempts;
   let lockedUntil = 0;
   if (attempts >= MAX_FAILED_ATTEMPTS) {
     // Each failure past the threshold doubles the wait, up to the cap.
@@ -232,9 +242,12 @@ function recordFailedAttempt(user) {
     const lockMs = Math.min(BASE_LOCK_MS * 2 ** overshoot, MAX_LOCK_MS);
     lockedUntil = Date.now() + lockMs;
   }
-  db.prepare('UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?')
-    .run(attempts, lockedUntil, user.id);
+  db.prepare('UPDATE users SET locked_until = ? WHERE id = ?').run(lockedUntil, userId);
   return lockedUntil;
+});
+
+function recordFailedAttempt(user) {
+  return recordFailure(user.id);
 }
 
 function clearFailedAttempts(userId) {

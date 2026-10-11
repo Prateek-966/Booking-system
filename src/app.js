@@ -70,7 +70,17 @@ app.use(
   })
 );
 
-// Small body limit: no endpoint needs large payloads.
+// Public assets do not need session lookups or SQLite writes on every load.
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Authenticated API responses contain guest and owner information. Prevent
+// browsers and intermediaries from retaining it after logout.
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
+// Small body limit: no JSON endpoint needs large payloads.
 app.use(express.json({ limit: '10kb' }));
 app.use(cookieParser());
 app.use(sessionLoader);
@@ -79,8 +89,6 @@ app.use(csrfProtection);
 app.use('/api/auth', authRoutes);
 app.use('/api', roomRoutes);
 app.use('/api', bookingRoutes);
-
-app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Unknown API routes get JSON 404s rather than the static handler's HTML.
 app.use('/api', (req, res) => {

@@ -94,31 +94,28 @@ router.post('/register', authLimiter, async (req, res, next) => {
   }
 });
 
-router.post('/login', authLimiter, async (req, res, next) => {
+router.post('/login', authLimiter, (req, res, next) => {
+  // A limiter ends throttled responses without calling next. Keep it in the
+  // middleware chain instead of waiting on a promise that never resolves.
+  if (req.body?.portal === 'owner') return ownerLoginLimiter(req, res, next);
+  return next();
+}, async (req, res, next) => {
   try {
     const { email, password, portal, totpCode, recoveryCode } = req.body ?? {};
     if (!Object.prototype.hasOwnProperty.call(PORTAL_ROLES, portal)) {
       return res.status(400).json({ error: 'Unknown sign-in portal' });
     }
-    // The owner portal gets the stricter limiter as well as the shared one.
-    if (portal === 'owner') {
-      await new Promise((resolve, reject) => {
-        ownerLoginLimiter(req, res, (err) => (err ? reject(err) : resolve()));
-      });
-      if (res.headersSent) return undefined;
-    }
-
     if (!v.isValidEmail(email) || typeof password !== 'string' || password.length > 1024) {
       return res.status(400).json({ error: 'Invalid email or password' });
     }
     const normalized = v.normalizeEmail(email);
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(normalized);
+    const account = db.prepare('SELECT * FROM users WHERE email = ?').get(normalized);
 
     // A locked account is refused before the password is even considered.
-    if (user) {
-      const remaining = auth.lockRemainingMs(user);
+    if (account) {
+      const remaining = auth.lockRemainingMs(account);
       if (remaining > 0) {
-        auth.recordLoginAttempt(req, { userId: user.id, email: normalized, outcome: 'locked' });
+        auth.recordLoginAttempt(req, { userId: account.id, email: normalized, outcome: 'locked' });
         return res.status(429).json({
           error: `Too many failed attempts. Try again in ${Math.ceil(remaining / 60000)} minute(s).`,
         });
@@ -127,9 +124,19 @@ router.post('/login', authLimiter, async (req, res, next) => {
 
     // Always run a comparison so a wrong password and a missing account are
     // indistinguishable in both timing and response.
-    const passwordOk = await bcrypt.compare(password, user ? user.password_hash : DUMMY_HASH);
+    const passwordOk = await bcrypt.compare(password, account ? account.password_hash : DUMMY_HASH);
+    // Password hashing yields to other requests. Re-read security state so a
+    // consumed TOTP, newly enabled 2FA, lockout or password rotation is honored.
+    const user = account ? db.prepare('SELECT * FROM users WHERE id = ?').get(account.id) : null;
 
-    if (!user || !passwordOk) {
+    if (user && auth.lockRemainingMs(user) > 0) {
+      auth.recordLoginAttempt(req, { userId: user.id, email: normalized, outcome: 'locked' });
+      return res.status(429).json({
+        error: `Too many failed attempts. Try again in ${Math.ceil(auth.lockRemainingMs(user) / 60000)} minute(s).`,
+      });
+    }
+
+    if (!user || !passwordOk || user.password_hash !== account.password_hash) {
       if (user) auth.recordFailedAttempt(user);
       auth.recordLoginAttempt(req, {
         userId: user ? user.id : null,
@@ -167,8 +174,11 @@ router.post('/login', authLimiter, async (req, res, next) => {
         const step = totp.verify(user.totp_secret, suppliedTotp, { minStep: user.totp_last_step });
         if (step !== null) {
           // Recording the step blocks replay of the same code inside its window.
-          db.prepare('UPDATE users SET totp_last_step = ? WHERE id = ?').run(step, user.id);
-          accepted = true;
+          const result = db.prepare(
+            `UPDATE users SET totp_last_step = ?
+               WHERE id = ? AND totp_enabled = 1 AND totp_secret = ? AND totp_last_step < ?`
+          ).run(step, user.id, user.totp_secret, step);
+          accepted = result.changes === 1;
         }
       }
 
@@ -227,7 +237,11 @@ router.post('/change-password', auth.requireAuth, authLimiter, async (req, res, 
     }
 
     const hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.user.id);
+    const updated = db.prepare('UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ?')
+      .run(hash, req.user.id, row.password_hash);
+    if (!updated.changes) {
+      return res.status(401).json({ error: 'Your password changed. Sign in again before retrying.' });
+    }
 
     // A password change revokes every session, then issues one fresh session.
     auth.destroyAllSessions(req.user.id);
@@ -269,8 +283,8 @@ function consumeRecoveryCode(userId, supplied) {
     .all(userId);
   for (const row of rows) {
     if (bcrypt.compareSync(supplied, row.code_hash)) {
-      db.prepare("UPDATE recovery_codes SET used_at = datetime('now') WHERE id = ?").run(row.id);
-      return true;
+      return db.prepare("UPDATE recovery_codes SET used_at = datetime('now') WHERE id = ? AND used_at IS NULL")
+        .run(row.id).changes === 1;
     }
   }
   return false;
@@ -278,9 +292,14 @@ function consumeRecoveryCode(userId, supplied) {
 
 // Step one: hand back a secret and its QR-ready URI. Nothing is switched on
 // until the owner proves they can generate a code from it.
-router.post('/2fa/setup', auth.requireOwner, (req, res) => {
+router.post('/2fa/setup', auth.requireOwner, authLimiter, (req, res) => {
   const secret = totp.generateSecret();
-  db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?').run(secret, req.user.id);
+  const result = db.prepare(
+    'UPDATE users SET totp_secret = ?, totp_last_step = 0 WHERE id = ? AND totp_enabled = 0'
+  ).run(secret, req.user.id);
+  if (!result.changes) {
+    return res.status(409).json({ error: 'Two-factor authentication is already on. Disable it before starting setup again.' });
+  }
   res.json({
     secret,
     uri: totp.provisioningUri(secret, { issuer: 'Staylist', account: req.user.email }),
@@ -320,7 +339,7 @@ router.post('/2fa/enable', auth.requireOwner, authLimiter, (req, res) => {
 router.post('/2fa/disable', auth.requireOwner, authLimiter, async (req, res, next) => {
   try {
     const { password } = req.body ?? {};
-    if (typeof password !== 'string' || password.length === 0) {
+    if (typeof password !== 'string' || password.length === 0 || password.length > 1024) {
       return res.status(400).json({ error: 'Your password is required to turn two-factor off' });
     }
     const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
@@ -328,9 +347,14 @@ router.post('/2fa/disable', auth.requireOwner, authLimiter, async (req, res, nex
     if (!ok) {
       return res.status(401).json({ error: 'Password is incorrect' });
     }
-    db.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = 0 WHERE id = ?')
-      .run(req.user.id);
+    const updated = db.prepare(
+      'UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = 0 WHERE id = ? AND password_hash = ?'
+    ).run(req.user.id, row.password_hash);
+    if (!updated.changes) {
+      return res.status(401).json({ error: 'Your password changed. Sign in again before retrying.' });
+    }
     db.prepare('DELETE FROM recovery_codes WHERE user_id = ?').run(req.user.id);
+    auth.destroyOtherSessions(req.user.id, req.sessionToken);
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -340,7 +364,7 @@ router.post('/2fa/disable', auth.requireOwner, authLimiter, async (req, res, nex
 router.post('/2fa/recovery-codes', auth.requireOwner, authLimiter, async (req, res, next) => {
   try {
     const { password } = req.body ?? {};
-    if (typeof password !== 'string' || password.length === 0) {
+    if (typeof password !== 'string' || password.length === 0 || password.length > 1024) {
       return res.status(400).json({ error: 'Your password is required' });
     }
     const row = db.prepare('SELECT password_hash, totp_enabled FROM users WHERE id = ?').get(req.user.id);
@@ -349,6 +373,10 @@ router.post('/2fa/recovery-codes', auth.requireOwner, authLimiter, async (req, r
     }
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'Password is incorrect' });
+    const current = db.prepare('SELECT password_hash, totp_enabled FROM users WHERE id = ?').get(req.user.id);
+    if (!current || current.password_hash !== row.password_hash || !current.totp_enabled) {
+      return res.status(401).json({ error: 'Your security settings changed. Sign in again before retrying.' });
+    }
 
     const codes = generateRecoveryCodes();
     storeRecoveryCodes(req.user.id, codes);

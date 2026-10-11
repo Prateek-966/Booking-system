@@ -147,13 +147,20 @@ router.get('/images/:id', (req, res) => {
   if (!v.isValidId(req.params.id)) {
     return res.status(400).json({ error: 'Invalid image id' });
   }
-  const image = db.prepare('SELECT mime_type, bytes FROM images WHERE id = ?').get(Number(req.params.id));
+  const isOwner = Boolean(req.user && ['owner', 'admin'].includes(req.user.role));
+  const image = db.prepare(
+    `SELECT i.mime_type, i.bytes FROM images i
+       LEFT JOIN rooms r ON r.id = i.room_id
+      WHERE i.id = ? AND (i.room_id IS NULL OR r.published = 1 OR ? = 1)`
+  ).get(Number(req.params.id), Number(isOwner));
   if (!image) {
     return res.status(404).json({ error: 'Image not found' });
   }
   res.set('Content-Type', image.mime_type);
   res.set('Content-Disposition', 'inline');
-  res.set('Cache-Control', 'public, max-age=86400');
+  // Revalidate visibility after a room is unpublished or a photo is deleted.
+  // Owner-only previews must never enter a shared cache.
+  res.set('Cache-Control', isOwner ? 'private, no-store' : 'public, max-age=0, must-revalidate');
   res.send(image.bytes);
 });
 
@@ -204,6 +211,11 @@ router.patch('/owner/property', requireOwner, (req, res) => {
 // --- Owner: rooms ---
 
 router.get('/owner/rooms', requireOwner, (req, res) => {
+  const imagesByRoom = new Map();
+  for (const image of db.prepare('SELECT id, room_id FROM images WHERE room_id IS NOT NULL ORDER BY id').all()) {
+    if (!imagesByRoom.has(image.room_id)) imagesByRoom.set(image.room_id, []);
+    imagesByRoom.get(image.room_id).push(image.id);
+  }
   const rooms = db
     .prepare(
       `SELECT id, name, description, price_per_night AS pricePerNight,
@@ -211,7 +223,7 @@ router.get('/owner/rooms', requireOwner, (req, res) => {
          FROM rooms ORDER BY id`
     )
     .all()
-    .map((r) => ({ ...r, published: Boolean(r.published), imageIds: imageIdsForRoom(r.id) }));
+    .map((r) => ({ ...r, published: Boolean(r.published), imageIds: imagesByRoom.get(r.id) || [] }));
   res.json({ rooms });
 });
 

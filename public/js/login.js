@@ -1,22 +1,12 @@
 'use strict';
 
-import { api, showMessage, initPage } from './common.js';
+import { api, showMessage, initPage, safeNextPath } from './common.js';
 
 const portal = document.body.dataset.portal; // 'guest' or 'owner'
 const isOwnerPortal = portal === 'owner';
 const home = isOwnerPortal ? '/owner.html' : '/bookings.html';
 
 let registering = false;
-
-// Only same-origin relative paths are honoured, so a crafted ?next= cannot
-// bounce a freshly signed-in user to an attacker's site (open redirect).
-function safeNext(fallback) {
-  const next = new URLSearchParams(window.location.search).get('next');
-  if (typeof next === 'string' && next.startsWith('/') && !next.startsWith('//')) {
-    return next;
-  }
-  return fallback;
-}
 
 // Guests can self-register; the owner account never can.
 function setMode(toRegistering) {
@@ -69,7 +59,8 @@ document.getElementById('auth-form').addEventListener('submit', async (e) => {
       }
       await api('/api/auth/login', { method: 'POST', body });
     }
-    window.location.href = safeNext(home);
+    const next = new URLSearchParams(window.location.search).get('next');
+    window.location.href = safeNextPath(next, home);
   } catch (err) {
     // A second factor is needed: reveal the code field rather than treating
     // this as a failure.

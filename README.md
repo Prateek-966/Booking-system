@@ -4,7 +4,7 @@ An Airbnb-style booking site for a **single guesthouse with individually bookabl
 
 ## Stack
 
-- **Backend:** Node.js (≥18), Express, better-sqlite3 (SQLite)
+- **Backend:** Node.js (≥22), Express, better-sqlite3 (SQLite)
 - **Frontend:** Vanilla HTML/CSS/ES modules, served statically
 - **Auth:** Server-side sessions (hashed tokens, HttpOnly cookies) with TOTP two-factor for the owner
 
@@ -23,7 +23,7 @@ npm install
 npm start          # serves http://127.0.0.1:3000
 ```
 
-The database is created in `data/` and seeded with an example guesthouse and four rooms so the site isn't empty. Set `SEED_DEMO=0` to skip that. **Seed data ships no usable credentials.**
+The database is created in `data/` and seeded with an example guesthouse and four rooms so the site isn't empty. Demo data is seeded only when the property is first created; restarting with no rooms never replaces saved details. Set `SEED_DEMO=0` to skip seeding. **Seed data ships no usable credentials.**
 
 Create the owner account — there are exactly two ways one comes into existence, both server-side:
 
@@ -42,7 +42,7 @@ Startup provisioning never overwrites an existing account, so a routine redeploy
 
 Then sign in at `/owner-login.html` and turn on two-factor authentication under **Security**.
 
-Run the test suite (52 tests, mostly security regression tests):
+Run the test suite (including security and persistence regression tests):
 
 ```bash
 npm test
@@ -65,6 +65,8 @@ Rooms are unique units: once a room is held for a night, nobody else can take it
 ## Booking notifications
 
 When a request arrives, the owner is alerted by **email and WhatsApp**. Every message is recorded in the database *before* delivery is attempted, so a request is never lost if a provider is down or unconfigured — the dashboard is always the source of truth. Delivery is fire-and-forget and can never delay or fail a guest's booking.
+
+Remote SMTP relays must support TLS; an explicitly configured loopback relay may use plaintext for local development. Delivery attempts have bounded timeouts.
 
 Transports activate purely from environment variables:
 
@@ -165,3 +167,5 @@ docker run -p 3000:3000 -v booking-data:/data booking-system
 ```
 
 Photos live in the database, so a persistent volume keeps images as well as bookings.
+
+Back up the SQLite database before upgrading older installations. Unsupported schema versions stop startup with an explicit error and require migration; startup never drops legacy booking tables automatically.

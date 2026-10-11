@@ -54,12 +54,32 @@ export function el(tag, props = {}, ...children) {
   return node;
 }
 
+const currencyFormatter = new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  maximumFractionDigits: 0,
+});
+
 export function money(amount) {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(amount);
+  return currencyFormatter.format(amount);
+}
+
+// Resolve with the same URL parser the browser uses before allowing a login
+// redirect. Backslashes and embedded tabs/newlines can turn a seemingly local
+// path into a network-path reference to another origin.
+export function safeNextPath(next, fallback, origin = window.location.origin) {
+  if (typeof next !== 'string' || !next.startsWith('/') || next.startsWith('//')) {
+    return fallback;
+  }
+  try {
+    const target = new URL(next, origin);
+    if (target.origin !== origin || target.username || target.password) return fallback;
+    // Keep the absolute same-origin URL: normalization may leave a pathname
+    // beginning with //, which would be external if assigned on its own.
+    return target.href;
+  } catch {
+    return fallback;
+  }
 }
 
 export function formatDate(iso) {

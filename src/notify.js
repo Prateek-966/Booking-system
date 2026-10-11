@@ -17,6 +17,7 @@
 // visible in the dashboard.
 
 const db = require('./db');
+const { isValidEmail } = require('./validators');
 
 const GRAPH_VERSION = process.env.WHATSAPP_API_VERSION || 'v21.0';
 
@@ -51,19 +52,30 @@ function markFailed(id, reason) {
 
 async function deliverEmail(id, { to, subject, body }) {
   if (!to) return markSkipped(id, 'no recipient address configured');
+  if (!isValidEmail(to)) return markFailed(id, 'invalid recipient address');
   if (!emailConfigured()) return markSkipped(id, 'SMTP is not configured');
   try {
     // Required lazily so the app runs fine when email is not in use.
     const nodemailer = require('nodemailer');
+    const host = process.env.SMTP_HOST;
+    const localRelay = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase());
     const transport = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
+      host,
       port: Number(process.env.SMTP_PORT) || 587,
       secure: Number(process.env.SMTP_PORT) === 465,
+      // Remote relays must support TLS before credentials or guest details
+      // are sent. An explicitly local relay may use plain loopback SMTP.
+      requireTLS: !localRelay,
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
       auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
     });
     await transport.sendMail({
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
-      to,
+      // Use a structured mailbox so even legacy stored input is never
+      // interpreted as multiple recipients or a display-name expression.
+      to: { address: to },
       subject,
       text: body,
     });
@@ -115,6 +127,8 @@ async function deliverWhatsApp(id, { to, body, templateParams }) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15_000),
+        redirect: 'error',
       }
     );
     if (!res.ok) {
@@ -143,7 +157,7 @@ function money(amount) {
 
 // Fire-and-forget: the returned promise is not awaited by request handlers, so
 // a slow or broken provider can never delay or fail a guest's booking.
-function notifyOwnerOfRequest(booking) {
+async function notifyOwnerOfRequest(booking) {
   const { email, phone } = ownerContacts();
   const subject = `Booking request: ${booking.room} — ${booking.checkIn} to ${booking.checkOut}`;
   const body =
@@ -182,7 +196,7 @@ function notifyOwnerOfRequest(booking) {
   ]);
 }
 
-function notifyGuestOfDecision(booking, approved) {
+async function notifyGuestOfDecision(booking, approved) {
   const subject = approved
     ? `Booking confirmed: ${booking.room}`
     : `Booking request declined: ${booking.room}`;

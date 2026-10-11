@@ -5,7 +5,9 @@ const MAX_STAY_NIGHTS = 60;
 const MAX_PRICE = 10_000_000; // whole currency units, per night
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Accept one mailbox, never display names or address lists. Those delimiters
+// otherwise have a second meaning when passed to an email transport.
+const EMAIL_RE = /^[^\s@<>,;:"\\()[\]]+@[^\s@<>,;:"\\()[\]]+\.[^\s@<>,;:"\\()[\]]+$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PHONE_RE = /^[+()\-\s0-9]{6,20}$/;
 
@@ -137,18 +139,25 @@ function isValidPhone(value) {
 // Prices are whole currency units held as integers — never floats, so totals
 // cannot drift through rounding error.
 function isValidPrice(value) {
-  const n = Number(value);
-  return Number.isInteger(n) && n > 0 && n <= MAX_PRICE;
+  return isPositiveInteger(value, MAX_PRICE);
 }
 
 function isValidGuestCount(value) {
-  const n = Number(value);
-  return Number.isInteger(n) && n > 0 && n <= 50;
+  return isPositiveInteger(value, 50);
 }
 
 function isValidId(value) {
+  return isPositiveInteger(value, Number.MAX_SAFE_INTEGER);
+}
+
+function isPositiveInteger(value, max) {
+  // URL parameters and form values may be decimal strings; objects, arrays,
+  // booleans and other coercible JSON values must not become valid numbers.
+  if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value.trim()))) {
+    return false;
+  }
   const n = Number(value);
-  return Number.isInteger(n) && n > 0 && n <= Number.MAX_SAFE_INTEGER;
+  return Number.isSafeInteger(n) && n > 0 && n <= max;
 }
 
 // Accepts only a real calendar date in YYYY-MM-DD form.
