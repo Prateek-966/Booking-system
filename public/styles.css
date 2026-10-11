@@ -949,3 +949,9 @@ button[type="submit"]:disabled { background: #9caf98; cursor: not-allowed; }
   color: var(--body-text);
   font-size: 0.9rem;
 }
+
+/* Keep conditional sign-in fields and panels hidden despite layout rules. */
+[hidden] { display: none !important; }
+
+#google-signin { margin: 1rem 0; }
+#google-confirm { margin-top: 1rem; }

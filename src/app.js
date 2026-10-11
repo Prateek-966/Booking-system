@@ -28,8 +28,10 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
-        styleSrc: ["'self'"],
+        scriptSrc: ["'self'", 'https://accounts.google.com/gsi/client'],
+        styleSrc: ["'self'", 'https://accounts.google.com/gsi/style'],
+        frameSrc: ['https://accounts.google.com/gsi/'],
+        connectSrc: ["'self'", 'https://accounts.google.com/gsi/'],
         imgSrc: ["'self'", 'data:'],
         // Fonts are self-hosted, so no external font host is permitted —
         // tighter than Helmet's default, which allows any https origin.
@@ -70,6 +72,12 @@ app.use(
   })
 );
 
+// Google's sign-in popup needs to communicate with its opening login page.
+app.use(['/login.html', '/owner-login.html'], (req, res, next) => {
+  res.set('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  next();
+});
+
 // Public assets do not need session lookups or SQLite writes on every load.
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -86,6 +94,7 @@ app.use(cookieParser());
 app.use(sessionLoader);
 app.use(csrfProtection);
 
+app.use('/api/auth/google', require('./routes/google'));
 app.use('/api/auth', authRoutes);
 app.use('/api', roomRoutes);
 app.use('/api', bookingRoutes);

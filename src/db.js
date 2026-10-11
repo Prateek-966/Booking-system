@@ -142,6 +142,18 @@ db.exec(`
     created_at TEXT    NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Google identities are bound to immutable provider subjects, never roles.
+  CREATE TABLE IF NOT EXISTS google_identities (
+    subject TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS google_login_attempts (
+    nonce_hash TEXT PRIMARY KEY,
+    portal TEXT NOT NULL CHECK (portal IN ('guest', 'owner')),
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_google_login_expiry ON google_login_attempts(expires_at);
+
   CREATE INDEX IF NOT EXISTS idx_images_room     ON images(room_id);
   CREATE INDEX IF NOT EXISTS idx_bookings_guest  ON bookings(guest_id);
   CREATE INDEX IF NOT EXISTS idx_bookings_room   ON bookings(room_id, check_in, check_out);

@@ -20,6 +20,26 @@
       <p class="portal-tag owner">Owner account</p>
       <h1 id="auth-title">Owner sign in</h1>
 
+      <section id="google-signin" hidden aria-label="Google sign-in">
+        <div id="google-button"></div>
+        <form id="google-confirm" hidden>
+          <p id="google-instructions" class="hint"></p>
+          <label id="google-password-row" hidden>Existing account password
+            <input type="password" id="google-password" maxlength="72" autocomplete="current-password">
+          </label>
+          <div id="google-factor-row" hidden>
+            <label>Authenticator code
+              <input type="text" id="google-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+            </label>
+            <label>Or a recovery code
+              <input type="text" id="google-recovery" maxlength="14" autocomplete="off" placeholder="XXXX-XXXX-XXXX">
+            </label>
+          </div>
+          <button type="submit" id="google-submit">Continue with Google</button>
+        </form>
+        <p class="hint">Or sign in with your password below.</p>
+      </section>
+
       <form id="auth-form">
         <label>Email<input type="email" id="email" required maxlength="254" autocomplete="username"></label>
         <label>Password<input type="password" id="password" required maxlength="72" autocomplete="current-password"></label>
@@ -50,5 +70,6 @@
   </main>
 
   <script type="module" src="/js/login.js"></script>
+  <script type="module" src="/js/google-login.js"></script>
 </body>
 </html>

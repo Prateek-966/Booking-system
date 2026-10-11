@@ -62,6 +62,10 @@ npm test
 
 Rooms are unique units: once a room is held for a night, nobody else can take it. A **pending request holds its dates**, so the owner is never asked to approve two guests for the same room and nights; declining releases them again.
 
+## Google sign-in
+
+Guests and the existing owner can sign in with Google after configuring a Web application client ID in `GOOGLE_CLIENT_ID`. Password login remains available; first-time linking of an existing account requires its password, and owner 2FA is retained. See [Google sign-in setup](docs/google-sign-in.md) for exact Google Cloud and Render settings.
+
 ## Booking notifications
 
 When a request arrives, the owner is alerted by **email and WhatsApp**. Every message is recorded in the database *before* delivery is attempted, so a request is never lost if a provider is down or unconfigured — the dashboard is always the source of truth. Delivery is fire-and-forget and can never delay or fail a guest's booking.
